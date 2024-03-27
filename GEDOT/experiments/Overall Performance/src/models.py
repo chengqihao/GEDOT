@@ -497,7 +497,16 @@ class TestGED(torch.nn.Module):
         self.args = args
         self.number_labels = number_of_labels
         self.setup_layers()
-        
+    def init_mlp_features(self):
+        k = self.number_labels+self.args.filters_1+self.args.filters_2+self.args.filters_3
+        layers = []
+        layers.append(torch.nn.Linear(k, k * 2))
+        layers.append(torch.nn.ReLU())
+        layers.append(torch.nn.Linear(k * 2, k))
+        layers.append(torch.nn.ReLU())
+        layers.append(torch.nn.Linear(k, 1))
+        self.mlp = torch.nn.Sequential(*layers)
+                
     def setup_layers(self):
         self.args.gnn_operator = 'gin'
         if self.args.gnn_operator == 'gcn':
@@ -528,6 +537,7 @@ class TestGED(torch.nn.Module):
             self.convolution_3 = GINConv(nn3, train_eps=True)
         else:
             raise NotImplementedError('Unknown GNN-Operator.')
+        self.init_mlp_features()
         self.costMatrix = GedMatrixModule(self.args.filters_3, self.args.hidden_dim)
         self.mapMatrix = SinkhornLayer(self.args.sinkhorn_iter,self.args.sinkhorn_temp,self.args.sinkhorn_eps)
         # bias
@@ -542,29 +552,40 @@ class TestGED(torch.nn.Module):
                                                      self.args.bottle_neck_neurons_3)
         self.scoring_layer = torch.nn.Linear(self.args.bottle_neck_neurons_3, 1)
     
-    def MLP_Feature(self,features1,features2,features3):
         
         
     def convolutional_pass(self, edge_index, features):
-        features_list=[]
+        features_list = features
         features = self.convolution_1(features, edge_index)#GIN1
-        
+        features_list = torch.cat([features_list,features],dim=1)
         features = torch.nn.functional.relu(features)
         features = torch.nn.functional.dropout(features,
                                             p=self.args.dropout,
                                             training=self.training)
 
         features = self.convolution_2(features, edge_index)
-        features2 = features
+        features_list = torch.cat([features_list,features],dim=1)
         features = torch.nn.functional.relu(features)
         features = torch.nn.functional.dropout(features,
                                             p=self.args.dropout,
                                             training=self.training)
         features = self.convolution_3(features, edge_index)
-        features3 = features
-        features_final = MLP_Feature(features1,features2,features3)
-        return features_final
-            
+        features_list = torch.cat([features_list,features],dim=1)
+        features = self.mlp(features_list)
+        #features_final = MLP_Feature(features_list)
+        return features
+    def get_bias_value(self, abstract_features_1, abstract_features_2):
+        pooled_features_1 = self.attention(abstract_features_1) #d x 1
+        pooled_features_2 = self.attention(abstract_features_2) #d x 1
+        scores = self.tensor_network(pooled_features_1, pooled_features_2) # tn x 1
+        scores = torch.t(scores) # 1 x tn
+        # 下面四行1 x tn--> 1 x bnn1 --> 1 x bnn2 --> 1 x bnn3 --> 1
+        scores = torch.nn.functional.relu(self.fully_connected_first(scores))
+        scores = torch.nn.functional.relu(self.fully_connected_second(scores))
+        scores = torch.nn.functional.relu(self.fully_connected_third(scores))
+        score = self.scoring_layer(scores).view(-1)
+        return score        
+    
     def forward(self,data):
         edge_index_1 = data["edge_index_1"]
         edge_index_2 = data["edge_index_2"]
@@ -572,4 +593,16 @@ class TestGED(torch.nn.Module):
         features_2 = data["features_2"]
         abstract_features_1 = self.convolutional_pass(edge_index_1, features_1)
         abstract_features_2 = self.convolutional_pass(edge_index_2, features_2)
-        cost_matrix = self.costMatrix(abstract_features_1, abstract_features_2)                
+        cost_matrix = self.costMatrix(abstract_features_1, abstract_features_2)
+        map_matrix = self.mapMatrix(cost_matrix)
+        m = torch.nn.Softmax(dim=1)
+        soft_matrix = m(map_matrix) * cost_matrix #按元素乘法
+        bias_value = self.get_bias_value(abstract_features_1, abstract_features_2)
+        score = torch.sigmoid(soft_matrix.sum() + bias_value)                
+        if self.args.target_mode == "exp":
+            pre_ged = -torch.log(score) * data["avg_v"]
+        elif self.args.target_mode == "linear":
+            pre_ged = score * data["hb"]
+        else:
+            assert False
+        return score, pre_ged.item(), map_matrix
