@@ -504,7 +504,7 @@ class TestGED(torch.nn.Module):
         layers.append(torch.nn.ReLU())
         layers.append(torch.nn.Linear(k * 2, k))
         layers.append(torch.nn.ReLU())
-        layers.append(torch.nn.Linear(k, 1))
+        layers.append(torch.nn.Linear(k,self.args.filters_3))
         self.mlp = torch.nn.Sequential(*layers)
                 
     def setup_layers(self):
@@ -593,6 +593,7 @@ class TestGED(torch.nn.Module):
         features_2 = data["features_2"]
         abstract_features_1 = self.convolutional_pass(edge_index_1, features_1)
         abstract_features_2 = self.convolutional_pass(edge_index_2, features_2)
+        #print(f"{abstract_features_1.shape},{abstract_features_2.shape}")
         cost_matrix = self.costMatrix(abstract_features_1, abstract_features_2)
         map_matrix = self.mapMatrix(cost_matrix)
         m = torch.nn.Softmax(dim=1)

@@ -14,7 +14,7 @@ from kbest_matching_with_lb import KBestMSolver
 from math import exp
 from scipy.stats import spearmanr, kendalltau
 
-from models import GPN, SimGNN, GedGNN, TaGSim
+from models import GPN, SimGNN, TestGED,GedGNN, TaGSim
 from GedMatrix import fixed_mapping_loss
 
 
@@ -66,6 +66,13 @@ class Trainer(object):
         elif self.args.model_name == "TaGSim":
             self.args.target_mode = 'exp'
             self.model = TaGSim(self.args, self.number_of_labels).to(self.device)
+        elif self.args.model_name == "TestGED":
+            if self.args.dataset in ["AIDS", "Linux"]:
+                self.args.loss_weight = 10.0
+            else:
+                self.args.loss_weight = 1.0    
+            self.args.gtmap = True
+            self.model = TestGED(self.args, self.number_of_labels).to(self.device)
         else:
             assert False
 
@@ -85,7 +92,7 @@ class Trainer(object):
                 prediction, _ = self.model(data)
                 losses = losses + torch.nn.functional.mse_loss(target, prediction)
                 # self.values.append((target - prediction).item())
-        elif self.args.model_name == "GedGNN":
+        elif self.args.model_name == "GedGNN" or self.args.model_name == "TestGED":
             weight = self.args.loss_weight
             for graph_pair in batch:
                 data = self.pack_graph_pair(graph_pair)
@@ -272,7 +279,7 @@ class Trainer(object):
             return None
 
     def init_graph_pairs(self):
-        random.seed(1)
+        random.seed(42)
 
         self.training_graphs = []
         self.val_graphs = []
